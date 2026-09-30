@@ -1,0 +1,196 @@
+// CycloneShield AI — UI controller
+const $ = s => document.querySelector(s);
+const fmt = n => Math.round(n).toLocaleString("en-IN");
+const inr = n => "₹" + (n / 1e7).toFixed(2) + " Cr";
+const tLab = t => `T${t >= 0 ? "+" : ""}${t}h`;
+const colorP = p => p > 0.6 ? "#e5484d" : p > 0.3 ? "#f5a524" : "#3dd68c";
+const windColor = w => w < 17 ? "#3b82f6" : w < 25 ? "#22d3ee" : w < 33 ? "#facc15" : w < 42 ? "#f97316" : w < 50 ? "#ef4444" : "#a21caf";
+
+const ASSETS = buildAssets();
+let RESULT = null, ENS = null, TRACK = null, SCN_NAME = "", ADVICE = null;
+const dispatchLog = [];
+
+// ---------- Map ----------
+const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([20.3, 86.8], 7);
+// Offline land layer (Natural Earth) underneath, so the map works even without tile access
+map.createPane("land"); map.getPane("land").style.zIndex = 150;
+L.geoJSON(LAND_GEOJSON, { pane: "land", style: { color: "#3b4a6b", weight: 1, fillColor: "#1a2438", fillOpacity: 1 }, interactive: false }).addTo(map);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { attribution: "© OpenStreetMap, © CARTO · Natural Earth", maxZoom: 18 }).addTo(map);
+const L_wind = L.layerGroup().addTo(map), L_track = L.layerGroup().addTo(map), L_ens = L.layerGroup().addTo(map),
+      L_assets = L.layerGroup().addTo(map), L_surge = L.layerGroup().addTo(map), L_storm = L.layerGroup().addTo(map);
+L.control.layers(null, { "Wind field": L_wind, "Storm surge / inundation": L_surge, "Ensemble tracks": L_ens, "Infrastructure": L_assets }, { collapsed: true }).addTo(map);
+
+function currentTrack() {
+  const s = $("#scenario").value;
+  let base;
+  if (s === "custom") {
+    base = customTrack({ lat: +$("#cLat").value, lon: +$("#cLon").value, heading: +$("#cHdg").value, vmax: +$("#cV").value, speed: +$("#cSpd").value });
+    SCN_NAME = `Custom cyclone (${$("#cV").value} kt, landfall ${$("#cLat").value}N ${$("#cLon").value}E)`;
+  } else { base = SCENARIOS[s].track; SCN_NAME = SCENARIOS[s].name; }
+  return perturbTrack(base, { shiftKm: +$("#shift").value, intensity: +$("#intensity").value / 100 });
+}
+
+function run() {
+  $("#intV").textContent = $("#intensity").value + "%";
+  $("#shiftV").textContent = $("#shift").value + " km";
+  $("#tideV").textContent = (+$("#tide").value).toFixed(1) + " m";
+  TRACK = currentTrack();
+  const opts = { assets: ASSETS, tide: +$("#tide").value };
+  RESULT = runScenario(TRACK, opts);
+  ENS = $("#ensemble").checked ? runEnsemble(TRACK, opts, 30, 48) : null;
+  $("#tSlider").min = TRACK[0].t; $("#tSlider").max = TRACK[TRACK.length - 1].t;
+  drawStatic(); drawTime(); renderPanels();
+}
+
+function drawStatic() {
+  L_track.clearLayers(); L_ens.clearLayers(); L_assets.clearLayers(); L_surge.clearLayers();
+  L.polyline(TRACK.map(p => [p.lat, p.lon]), { color: "#fff", weight: 2.5, dashArray: "6 5" }).addTo(L_track);
+  TRACK.forEach(p => L.circleMarker([p.lat, p.lon], { radius: 4, color: windColor(p.v * 0.514), fillOpacity: 1 })
+    .bindTooltip(`${tLab(p.t)} · ${Math.round(p.v)} kt · ${Math.round(p.p)} hPa`).addTo(L_track));
+  if (ENS) {
+    ENS.tracks.forEach(tr => L.polyline(tr.map(p => [p.lat, p.lon]), { color: "#38bdf8", weight: 1, opacity: 0.18 }).addTo(L_ens));
+    const lf = RESULT.landfall;
+    L.circle([lf.lat, lf.lon], { radius: ENS.sigmaKm * 1000 * 1.5, color: "#38bdf8", weight: 1, dashArray: "4 4", fill: false })
+      .bindTooltip("Landfall uncertainty cone (~1.5σ)").addTo(L_ens);
+  }
+  // Surge/inundation bubbles
+  RESULT.towns.filter(t => t.surge > 0.2).forEach(t => {
+    L.circle([t.lat, t.lon], { radius: 4000 + t.depth * 9000, color: "#0ea5e9", weight: 1, fillColor: "#0ea5e9", fillOpacity: Math.min(0.55, 0.12 + t.depth * 0.2) })
+      .bindTooltip(`${t.name}: surge ${t.surge.toFixed(1)} m · inundation ${t.depth.toFixed(1)} m`).addTo(L_surge);
+  });
+  RESULT.assets.forEach(a => {
+    const c = colorP(a.pService);
+    const html = `<b>${a.name}</b><br>${a.district}, ${a.state}<br>Service-loss probability: <b style="color:${c}">${Math.round(a.pService * 100)}%</b><br>` +
+      `Peak wind ${Math.round(a.maxWind * 3.6)} km/h · Inundation ${a.depth.toFixed(2)} m · Rain ${Math.round(a.rain)} mm<br>Main driver: ${a.driver}${a.cascade ? `<br>Cascade: ${a.cascade}` : ""}` +
+      `<br>Gale onset: ${a.onset !== null ? tLab(a.onset) : "—"}`;
+    if (a.path) L.polyline(a.path, { color: c, weight: a.pService > 0.3 ? 4 : 2, opacity: 0.85 }).bindPopup(html).addTo(L_assets);
+    else L.circleMarker([a.lat, a.lon], { radius: a.type === "hospital" || a.type === "substation" ? 6 : 4.5, color: "#0b1220", weight: 1, fillColor: c, fillOpacity: 0.95 }).bindPopup(html).addTo(L_assets);
+  });
+}
+
+function drawTime() {
+  const t = +$("#tSlider").value;
+  $("#tLabel").textContent = tLab(t);
+  const s = stateAt(TRACK, t);
+  $("#stormInfo").textContent = `${s.lat.toFixed(2)}°N ${s.lon.toFixed(2)}°E · ${Math.round(s.v)} kt (${Math.round(s.v * 1.852)} km/h) · ${Math.round(s.p)} hPa · moving ${Math.round(s.heading)}° @ ${Math.round(s.vt * 3.6)} km/h`;
+  L_wind.clearLayers(); L_storm.clearLayers();
+  windGrid(s).forEach(c => L.rectangle([[c.la, c.lo], [c.la + 0.2, c.lo + 0.2]], { stroke: false, fillColor: windColor(c.w), fillOpacity: Math.min(0.6, 0.12 + c.w / 90), interactive: false }).addTo(L_wind));
+  L.marker([s.lat, s.lon], { icon: L.divIcon({ className: "", html: '<div class="storm-icon">🌀</div>', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(L_storm);
+}
+
+// ---------- Panels ----------
+function renderPanels() {
+  const R = RESULT;
+  const evac = R.towns.reduce((s, t) => s + t.evac, 0);
+  const red = new Set(R.towns.filter(t => t.level === "Red").map(t => t.district)).size;
+  const crit = R.assets.filter(a => a.pService > 0.5).length;
+  const pay = R.payouts.reduce((s, p) => s + p.payout, 0);
+  const maxSurge = Math.max(...R.towns.map(t => t.surge));
+  $("#hdrStats").innerHTML = `<div><b>${Math.round(R.landfall.v * 1.852)} km/h</b><span>Landfall intensity</span></div><div><b>${red}</b><span>Red-alert districts</span></div><div><b>${fmt(evac)}</b><span>To evacuate</span></div><div><b>${crit}</b><span>Assets at risk</span></div><div><b>${inr(pay)}</b><span>Parametric payout</span></div>`;
+
+  const topAssets = R.assets.slice().sort((a, b) => b.risk - a.risk).slice(0, 6);
+  const earliest = R.towns.filter(t => t.level === "Red" && t.evacDeadline !== null).sort((a, b) => a.evacDeadline - b.evacDeadline)[0];
+  $("#tab-overview").innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><b>${maxSurge.toFixed(1)} m</b><span>Peak storm surge</span></div>
+      <div class="kpi"><b>${fmt(Math.max(...R.towns.map(t => t.rain)))} mm</b><span>Max event rainfall</span></div>
+      <div class="kpi"><b>${fmt(evac)}</b><span>People to evacuate</span></div>
+      <div class="kpi"><b>${earliest ? tLab(earliest.evacDeadline) : "—"}</b><span>Earliest evacuation deadline ${earliest ? "(" + earliest.name + ")" : ""}</span></div>
+    </div>
+    <div class="note">${SCN_NAME}. Landfall ${R.landfall.lat.toFixed(2)}°N ${R.landfall.lon.toFixed(2)}°E. ${ENS ? `Ensemble track error σ ≈ ${Math.round(ENS.sigmaKm)} km at 48 h lead.` : ""}</div>
+    <h3 style="font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px">Highest-risk infrastructure</h3>
+    ${topAssets.map(a => `<div class="card" style="padding:8px 10px"><b>${ASSET_TYPES[a.type].icon} ${a.name}</b><div class="hint">${Math.round(a.pService * 100)}% service-loss · driver: ${a.driver}${a.cascade ? " · cascade: " + a.cascade : ""}</div><div class="bar"><i style="width:${a.pService * 100}%;background:${colorP(a.pService)}"></i></div></div>`).join("")}
+    <h3 style="font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px">Asset exposure by type</h3>
+    <table><tr><th>Type</th><th>Assets</th><th>&gt;50% loss</th><th>Mean loss</th></tr>
+    ${Object.keys(ASSET_TYPES).map(k => { const xs = R.assets.filter(a => a.type === k); return `<tr><td>${ASSET_TYPES[k].icon} ${ASSET_TYPES[k].label}</td><td>${xs.length}</td><td>${xs.filter(a => a.pService > 0.5).length}</td><td>${Math.round(xs.reduce((s, a) => s + a.pService, 0) / xs.length * 100)}%</td></tr>`; }).join("")}</table>`;
+
+  const order = { Red: 0, Orange: 1, Yellow: 2, Green: 3 };
+  $("#tab-districts").innerHTML = `<table><tr><th>Town</th><th>Alert</th><th>Wind km/h</th><th>Surge / inund. (m)</th><th>Evacuate</th><th>Deadline</th>${ENS ? "<th>P(≥33 m/s)</th>" : ""}</tr>
+    ${R.towns.slice().sort((a, b) => order[a.level] - order[b.level] || b.maxWind - a.maxWind).map(t => `<tr class="click" data-lat="${t.lat}" data-lon="${t.lon}">
+      <td><b>${t.name}</b><div class="hint">${t.district}</div></td><td><span class="pill ${t.level}">${t.level}</span></td>
+      <td>${Math.round(t.maxWind * 3.6)}</td><td>${t.surge.toFixed(1)} / ${t.depth.toFixed(1)}<div class="hint">${Math.round(t.rain)} mm rain</div></td>
+      <td>${fmt(t.evac)}${t.evac > t.shelterCap && t.evac > 0 ? ' <span title="Shelter capacity shortfall" style="color:var(--red)">⚠</span>' : ""}</td>
+      <td class="mono">${t.evacDeadline !== null && t.level !== "Green" ? tLab(t.evacDeadline) : "—"}</td>
+      ${ENS ? `<td>${Math.round(ENS.prob[t.id].w33 * 100)}%</td>` : ""}</tr>`).join("")}</table>
+      <p class="hint">⚠ = modelled evacuee demand exceeds functional shelter capacity (after damage). Deadline = gale-force onset − 6 h.</p>`;
+
+  $("#tab-assets").innerHTML = `<table><tr><th>Asset</th><th>Loss %</th><th>Driver / cascade</th><th>Risk</th></tr>
+    ${R.assets.slice().sort((a, b) => b.risk - a.risk).map(a => `<tr class="click" data-lat="${a.lat}" data-lon="${a.lon}"><td>${ASSET_TYPES[a.type].icon} ${a.name}<div class="hint">wind ${Math.round(a.maxWind * 3.6)} km/h · ${a.depth.toFixed(2)} m · ${Math.round(a.rain)} mm</div></td>
+    <td style="color:${colorP(a.pService)};font-weight:700">${Math.round(a.pService * 100)}</td><td>${a.driver}${a.cascade ? `<div class="hint">↳ ${a.cascade}</div>` : ""}</td><td>${a.risk}</td></tr>`).join("")}</table>`;
+
+  $("#tab-insurance").innerHTML = `<div class="note">Parametric triggers pay out on <b>modelled</b> peak wind at the insured location — so liquidity can be released <b>before landfall</b> for evacuation, livestock and boat protection, instead of weeks after loss assessment.</div>
+    <div class="kpis"><div class="kpi"><b>${inr(pay)}</b><span>Pre-landfall payout estimate</span></div><div class="kpi"><b>${R.payouts.filter(p => p.payout > 0).length}/${R.payouts.length}</b><span>Policies triggered</span></div></div>
+    <table><tr><th>Policy holder</th><th>Peak wind</th><th>Trigger</th><th>Payout</th></tr>${R.payouts.map(p => `<tr><td>${p.holder}<div class="hint">Sum insured ${inr(p.sum)}</div></td><td>${p.maxWind.toFixed(1)} m/s</td><td>${p.tier}</td><td><b>${inr(p.payout)}</b></td></tr>`).join("")}</table>
+    <p class="hint">Tiers: ${PAYOUT_TIERS.map(t => t.label + " → " + t.pct * 100 + "%").join(" · ")}</p>`;
+
+  document.querySelectorAll("tr.click").forEach(tr => tr.onclick = () => map.flyTo([+tr.dataset.lat, +tr.dataset.lon], 10));
+  if (ADVICE) renderAdvice(ADVICE);
+}
+
+// ---------- Advisories ----------
+async function generate() {
+  const btn = $("#genBtn"); btn.disabled = true; btn.textContent = "Reasoning…";
+  const key = $("#gKey").value.trim(), model = $("#gModel").value.trim();
+  let out;
+  try {
+    if (key) {
+      let image = null; const f = $("#gImg").files[0];
+      if (f) image = await new Promise(res => { const r = new FileReader(); r.onload = () => res({ mime: f.type, b64: r.result.split(",")[1] }); r.readAsDataURL(f); });
+      out = await GEMINI.generate({ key, model, prompt: GEMINI.buildPrompt(RESULT, SCN_NAME), image });
+      out.source = `Gemini (${model})`;
+    } else out = offlineAdvisories(RESULT, SCN_NAME);
+  } catch (e) {
+    out = offlineAdvisories(RESULT, SCN_NAME); out.source = "offline rule engine (Gemini error: " + e.message.slice(0, 120) + ")";
+  }
+  ADVICE = out; renderAdvice(out);
+  document.querySelector('[data-tab="advisory"]').click();
+  btn.disabled = false; btn.textContent = "Generate advisories";
+}
+
+function renderAdvice(o) {
+  $("#tab-advisory").innerHTML = `<div class="note"><b>Situation</b> — ${o.situation_summary}<br><span class="hint">Source: ${o.source || "Gemini"}</span></div>
+    ${o.image_assessment ? `<div class="card"><h4>🛰 Image assessment (multimodal)</h4>${o.image_assessment}</div>` : ""}
+    <div class="btnrow" style="margin-bottom:10px"><button id="dispatchAll">📣 Dispatch all Red/Orange</button><button id="dlJson">⬇ JSON</button></div>
+    ${(o.advisories || []).map((a, i) => `<div class="card"><h4><span class="pill ${a.alert}">${a.alert}</span> ${a.district}</h4><div>${a.headline}</div>
+      <ul>${(a.actions || []).map(x => `<li>${x}</li>`).join("")}</ul>
+      <div class="sms"><b>SMS (${a.local_language}):</b> ${a.local_language_sms}</div><div class="sms"><b>SMS (English):</b> ${a.english_sms}</div>
+      <div class="btnrow"><button data-cap="${i}">CAP-XML</button><button data-disp="${i}">Dispatch</button></div></div>`).join("")}
+    <h3 style="font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px">Pre-landfall infrastructure hardening</h3>
+    <table><tr><th>Asset</th><th>Action</th><th>By</th></tr>${(o.infrastructure_actions || []).map(x => `<tr><td>${x.asset}</td><td>${x.action}</td><td class="mono">T-${x.deadline_h_before_landfall}h</td></tr>`).join("")}</table>
+    <h3 style="font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px">Damage pathways</h3><ul>${(o.damage_pathways || []).map(x => `<li>${x}</li>`).join("")}</ul>
+    <div class="log" id="log">${dispatchLog.join("<br>") || "Dispatch log — messages go to SACHET/CAP aggregator, cell-broadcast, SMS gateway and district WhatsApp groups (simulated)."}</div>`;
+  document.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => showModal(toCAP(o.advisories[+b.dataset.cap], RESULT, +b.dataset.cap)));
+  document.querySelectorAll("[data-disp]").forEach(b => b.onclick = () => dispatch(o.advisories[+b.dataset.disp]));
+  $("#dispatchAll").onclick = () => o.advisories.filter(a => a.alert !== "Yellow").forEach(dispatch);
+  $("#dlJson").onclick = () => { const bl = new Blob([JSON.stringify(o, null, 2)], { type: "application/json" }); const u = URL.createObjectURL(bl); const a = document.createElement("a"); a.href = u; a.download = "cycloneshield-advisories.json"; a.click(); };
+}
+function dispatch(a) {
+  const ts = new Date().toLocaleTimeString("en-IN");
+  ["CAP→SACHET", "Cell-broadcast", "SMS gateway", "DDMA WhatsApp"].forEach(ch => dispatchLog.push(`[${ts}] ✓ ${a.alert.toUpperCase()} ${a.district} → ${ch}`));
+  const l = $("#log"); if (l) { l.innerHTML = dispatchLog.join("<br>"); l.scrollTop = 1e6; }
+}
+function showModal(txt) { $("#mBody").textContent = txt; $("#modal").classList.remove("hidden"); }
+$("#mClose").onclick = () => $("#modal").classList.add("hidden");
+
+// ---------- Wiring ----------
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#tabs button, .tab").forEach(x => x.classList.remove("active"));
+  b.classList.add("active"); $("#tab-" + b.dataset.tab).classList.add("active");
+});
+$("#scenario").onchange = () => {
+  $("#customBox").classList.toggle("hidden", $("#scenario").value !== "custom");
+  const s = $("#scenario").value; ADVICE = null;
+  map.flyTo(s === "amphan" ? [21.9, 88.0] : s === "custom" ? [+$("#cLat").value, +$("#cLon").value] : [20.3, 86.2], 7);
+  run();
+};
+["#intensity", "#shift", "#tide", "#ensemble", "#cLat", "#cLon", "#cHdg", "#cV", "#cSpd"].forEach(id => $(id).addEventListener("change", run));
+["#intensity", "#shift", "#tide"].forEach(id => $(id).addEventListener("input", () => { $("#intV").textContent = $("#intensity").value + "%"; $("#shiftV").textContent = $("#shift").value + " km"; $("#tideV").textContent = (+$("#tide").value).toFixed(1) + " m"; }));
+$("#tSlider").oninput = drawTime;
+$("#genBtn").onclick = generate;
+let timer = null;
+$("#play").onclick = () => {
+  if (timer) { clearInterval(timer); timer = null; $("#play").textContent = "▶"; return; }
+  $("#play").textContent = "⏸";
+  timer = setInterval(() => { const s = $("#tSlider"); s.value = +s.value >= +s.max ? s.min : +s.value + 2; drawTime(); }, 180);
+};
+run();
