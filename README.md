@@ -50,6 +50,9 @@ CycloneShield AI converts a cyclone forecast into an **impact-based, asset-level
 | **Advisories** | Gemini (or offline rule engine) bulletins, multilingual SMS, infra-hardening checklist with deadlines, damage pathways, CAP-XML viewer, one-click dispatch log, JSON export. |
 | **Parametric** | Tiered wind triggers (≥33 / ≥42 / ≥50 m/s) → payout per policy and pre-landfall liquidity total. |
 
+### Design
+“Storm Ops” interface: warm graphite surfaces, a single signal-amber accent and an ember → oxblood hazard ramp (no blue, so hazard colours never compete with the UI), Space Grotesk + IBM Plex Mono tabular numerals for fast scanning, numbered control cards, an on-map legend, a landfall-marked timeline, and IMD-style alert pills.
+
 ## 4. How it works (science)
 
 All models run client-side in [`js/model.js`](js/model.js):
@@ -73,6 +76,7 @@ All models run client-side in [`js/model.js`](js/model.js):
 |---|---|
 | **Gemini (Flash, multimodal)** — `js/gemini.js` | Converts model output into a structured JSON situation report, district advisories, native-language SMS, infrastructure actions & damage pathways; interprets uploaded satellite / radar / drone images. Model name configurable (default `gemini-3.7-flash` as per the challenge brief). |
 | **Google Earth Engine** — `gee/cyclone_exposure.js` | Copernicus DEM low-elevation coastal zones, WorldPop population exposure, ESA WorldCover built-up/cropland, **Sentinel-1 SAR flood mapping** for validation, **GPM IMERG** rainfall, district exposure export (FAO GAUL). |
+| **Google Maps Platform** — `js/app.js`, `js/config.js` | Optional Google Maps roadmap / satellite / terrain basemap (Maps JavaScript API) with a custom warm dark style. |
 | **Google AI Studio** | API key issuance for Gemini. |
 | **Firebase / Cloud Run (roadmap)** | Hosting, scheduled ingestion of IMD / JTWC advisories, FCM push to officials. |
 
@@ -105,6 +109,7 @@ cycloneshield-ai/
 ├── index.html              # Single-page dashboard
 ├── css/style.css           # UI styles (responsive)
 ├── js/
+│   ├── config.js           # Optional Google Maps API key & default basemap
 │   ├── data.js             # Scenario tracks, towns, asset archetypes & fragilities, insurance policies
 │   ├── model.js            # Hazard, damage, cascade, ensemble engine
 │   ├── gemini.js           # Gemini API client, prompt, offline advisory engine, CAP-XML
@@ -129,6 +134,24 @@ python3 -m http.server 8000     # or any static server
 **Gemini:** paste an API key from [Google AI Studio](https://aistudio.google.com/apikey) in the left panel and press *Generate advisories* (optionally attach a satellite image). The key stays in your browser. Without a key, the offline rule engine produces the same schema so the demo always works.
 
 **Earth Engine:** open [`gee/cyclone_exposure.js`](gee/cyclone_exposure.js) in the [GEE Code Editor](https://code.earthengine.google.com) and click *Run*; export the district table to feed real exposure into `js/data.js`.
+
+### 🗺️ Where to put the Google Maps API key
+
+The app works without any key (Esri dark basemap + offline coastline). To switch to **Google Maps** (roads / satellite / terrain) you have two options:
+
+**Option A — in the app (no code change, recommended for the demo)**
+1. Open the live prototype.
+2. In the **left panel**, scroll to the last card **“04 · Map & Google Maps”**.
+3. Paste the key into **“Google Maps API key”** and click **“Apply Google Maps key”**.
+4. Pick **Base map → Google Maps — roads / satellite / terrain**.
+   The key is saved only in that browser (`localStorage`). You can also open `…/cycloneshield-ai/?mapsKey=YOUR_KEY`.
+
+**Option B — permanently in the code**
+Edit [`js/config.js`](js/config.js) → line `GOOGLE_MAPS_API_KEY: "",` → paste the key between the quotes, optionally set `DEFAULT_BASEMAP: "google-hybrid"`, then commit & push.
+⚠️ This makes the key public, so in **Google Cloud Console → APIs & Services → Credentials → your key** set
+*Application restrictions = Websites → `https://ravirepswal108-lgtm.github.io/*`* and *API restrictions = Maps JavaScript API*.
+
+Requirements for the key: billing enabled on the Google Cloud project and **Maps JavaScript API** enabled. Integration uses the official Maps JavaScript API through the Leaflet GoogleMutant plugin (`vendor/leaflet/Leaflet.GoogleMutant.js`), with a custom warm dark map style.
 
 ## 9. Demo walkthrough (2 minutes)
 

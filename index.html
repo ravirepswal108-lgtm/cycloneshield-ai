@@ -5,66 +5,86 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CycloneShield AI — Cyclone Impact & Infrastructure Vulnerability Forecaster</title>
 <meta name="description" content="Pre-landfall cyclone storm-surge, rainfall and critical-infrastructure risk forecasting with Gemini-generated early-warning advisories.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌀</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%23f5a524'/><circle cx='50' cy='50' r='12' fill='none' stroke='%231a1206' stroke-width='9'/><path d='M50 16C30 16 16 29 16 46M84 54C84 71 70 84 50 84' stroke='%231a1206' stroke-width='9' fill='none' stroke-linecap='round'/></svg>">
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=3">
 </head>
 <body>
 <header>
-  <div class="brand"><span class="logo">🌀</span><div><h1>CycloneShield AI</h1><p>Cyclone Impact &amp; Infrastructure Vulnerability Forecaster</p></div></div>
+  <div class="brand"><div class="logo"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#1a1206" stroke-width="2.2" stroke-linecap="round"><path d="M12 12m-2.2 0a2.2 2.2 0 1 0 4.4 0a2.2 2.2 0 1 0-4.4 0"/><path d="M12 3c-5 0-9 3.2-9 7.5"/><path d="M21 13.5C21 17.8 17 21 12 21"/><path d="M4.5 16.5C6 19 9 20.6 12 21"/><path d="M19.5 7.5C18 5 15 3.4 12 3"/></svg></div><div><h1>CycloneShield AI</h1><p>Cyclone impact &amp; infrastructure vulnerability forecaster</p></div></div>
+  <div class="status"><span class="live"></span><span id="scnChip">—</span></div>
   <div class="hdr-stats" id="hdrStats"></div>
 </header>
 
 <main>
   <aside id="controls">
-    <section>
-      <h3>1 · Scenario</h3>
-      <select id="scenario">
+    <section class="ctl">
+      <h3><i>01</i>Scenario</h3>
+      <select id="scenario" aria-label="Scenario">
         <option value="fani">ESCS Fani (2019) — Odisha</option>
         <option value="amphan">SuCS Amphan (2020) — West Bengal</option>
         <option value="custom">Custom what-if cyclone</option>
       </select>
       <div id="customBox" class="hidden">
-        <label>Landfall lat <input type="number" id="cLat" value="20.3" step="0.1"></label>
-        <label>Landfall lon <input type="number" id="cLon" value="86.7" step="0.1"></label>
-        <label>Heading (°) <input type="number" id="cHdg" value="20" step="5"></label>
-        <label>Max wind (kt) <input type="number" id="cV" value="115" step="5"></label>
-        <label>Speed (km/h) <input type="number" id="cSpd" value="15" step="1"></label>
+        <div class="grid2">
+          <label>Landfall lat<input type="number" id="cLat" value="20.3" step="0.1"></label>
+          <label>Landfall lon<input type="number" id="cLon" value="86.7" step="0.1"></label>
+          <label>Heading (°)<input type="number" id="cHdg" value="20" step="5"></label>
+          <label>Max wind (kt)<input type="number" id="cV" value="115" step="5"></label>
+        </div>
+        <label>Forward speed (km/h)<input type="number" id="cSpd" value="15" step="1"></label>
       </div>
     </section>
-    <section>
-      <h3>2 · Forecast adjustments</h3>
+
+    <section class="ctl">
+      <h3><i>02</i>Forecast adjustments</h3>
       <label class="rng">Intensity <b id="intV">100%</b><input type="range" id="intensity" min="70" max="130" value="100"></label>
       <label class="rng">Cross-track shift <b id="shiftV">0 km</b><input type="range" id="shift" min="-150" max="150" value="0" step="10"></label>
       <label class="rng">Tide + sea-level offset <b id="tideV">0.8 m</b><input type="range" id="tide" min="0" max="2" value="0.8" step="0.1"></label>
       <label class="chk"><input type="checkbox" id="ensemble" checked> Ensemble uncertainty (30 members)</label>
     </section>
-    <section>
-      <h3>3 · Gemini reasoning</h3>
-      <label>Gemini API key <input type="password" id="gKey" placeholder="optional — AI Studio key"></label>
-      <label>Model <input type="text" id="gModel" value="gemini-3.7-flash"></label>
-      <label>Satellite / radar image (optional) <input type="file" id="gImg" accept="image/*"></label>
+
+    <section class="ctl">
+      <h3><i>03</i>Gemini reasoning</h3>
+      <label>Gemini API key<input type="password" id="gKey" placeholder="Paste AI Studio key (optional)" autocomplete="off"></label>
+      <label>Model<input type="text" id="gModel" value="gemini-3.7-flash"></label>
+      <label>Satellite / radar image<input type="file" id="gImg" accept="image/*"></label>
       <button id="genBtn" class="primary">Generate advisories</button>
-      <p class="hint">No key? A built-in rule engine produces the same advisory schema. Keys stay in your browser only.</p>
+      <p class="hint">No key? A built-in rule engine produces the same advisory format.</p>
     </section>
-    <section class="legend">
-      <h3>Legend</h3>
-      <div><i class="dot" style="background:#e5484d"></i>Service loss &gt;60%</div>
-      <div><i class="dot" style="background:#f5a524"></i>30–60%</div>
-      <div><i class="dot" style="background:#3dd68c"></i>&lt;30%</div>
-      <div><i class="sw" style="background:linear-gradient(90deg,#3b82f633,#facc15aa,#ef4444cc,#a21caf)"></i>Wind field 12→60 m/s</div>
+
+    <section class="ctl" id="mapSettings">
+      <h3><i>04</i>Map &amp; Google Maps</h3>
+      <label>Base map
+        <select id="basemap">
+          <option value="dark">Dark (Esri, no key)</option>
+          <option value="google-roadmap">Google Maps — roads</option>
+          <option value="google-hybrid">Google Maps — satellite</option>
+          <option value="google-terrain">Google Maps — terrain</option>
+          <option value="offline">Offline outline</option>
+        </select>
+      </label>
+      <label>Google Maps API key<input type="password" id="mapsKey" placeholder="Paste Maps JavaScript API key" autocomplete="off"></label>
+      <button id="mapsKeyBtn" class="ghost">Apply Google Maps key</button>
+      <p class="hint" id="mapsKeyMsg">Saved only in this browser. Needs “Maps JavaScript API” enabled.</p>
     </section>
   </aside>
 
   <section id="center">
     <div id="map"></div>
+    <div class="map-legend">
+      <b>Wind speed (m/s)</b>
+      <div class="ramp"></div><div class="ticks"><span>12</span><span>25</span><span>33</span><span>42</span><span>50</span><span>60+</span></div>
+      <b>Service-loss probability</b>
+      <div class="row"><span><i class="dot" style="background:#ef4444"></i>&gt;60%</span><span><i class="dot" style="background:#f5a524"></i>30–60%</span><span><i class="dot" style="background:#9bcf53"></i>&lt;30%</span></div>
+    </div>
     <div id="timeline">
-      <button id="play" title="Play">▶</button>
-      <input type="range" id="tSlider" min="-72" max="36" value="-24" step="1">
-      <span id="tLabel" class="mono">T-24h</span>
-      <span id="stormInfo" class="mono"></span>
+      <button id="play" title="Play / pause" aria-label="Play">▶</button>
+      <div class="tl-track"><span class="tl-lf" id="tlLf">▼ landfall</span><input type="range" id="tSlider" min="-72" max="36" value="-24" step="1" aria-label="Time relative to landfall"></div>
+      <span id="tLabel">T-24h</span>
+      <span id="stormInfo"></span>
     </div>
   </section>
 
@@ -72,25 +92,27 @@
     <nav id="tabs">
       <button data-tab="overview" class="active">Overview</button>
       <button data-tab="districts">Districts</button>
-      <button data-tab="assets">Infrastructure</button>
+      <button data-tab="assets">Assets</button>
       <button data-tab="advisory">Advisories</button>
       <button data-tab="insurance">Parametric</button>
     </nav>
     <div id="tab-overview" class="tab active"></div>
     <div id="tab-districts" class="tab"></div>
     <div id="tab-assets" class="tab"></div>
-    <div id="tab-advisory" class="tab"><p class="hint">Click <b>Generate advisories</b> to produce district-level early-warning bulletins, multilingual SMS and CAP-XML dispatches.</p></div>
+    <div id="tab-advisory" class="tab"><p class="hint">Press <b>Generate advisories</b> to produce district bulletins, multilingual SMS and CAP-XML dispatches.</p></div>
     <div id="tab-insurance" class="tab"></div>
   </aside>
 </main>
 
-<div id="modal" class="hidden"><div class="mbox"><button id="mClose">✕</button><pre id="mBody"></pre></div></div>
+<div id="modal" class="hidden"><div class="mbox"><button id="mClose" aria-label="Close">✕</button><pre id="mBody"></pre></div></div>
 
 <script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/leaflet/Leaflet.GoogleMutant.js"></script>
 <script src="data/land.js"></script>
-<script src="js/data.js"></script>
-<script src="js/model.js"></script>
-<script src="js/gemini.js"></script>
-<script src="js/app.js"></script>
+<script src="js/config.js?v=3"></script>
+<script src="js/data.js?v=3"></script>
+<script src="js/model.js?v=3"></script>
+<script src="js/gemini.js?v=3"></script>
+<script src="js/app.js?v=3"></script>
 </body>
 </html>

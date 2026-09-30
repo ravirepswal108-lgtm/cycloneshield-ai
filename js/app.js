@@ -3,8 +3,9 @@ const $ = s => document.querySelector(s);
 const fmt = n => Math.round(n).toLocaleString("en-IN");
 const inr = n => "₹" + (n / 1e7).toFixed(2) + " Cr";
 const tLab = t => `T${t >= 0 ? "+" : ""}${t}h`;
-const colorP = p => p > 0.6 ? "#e5484d" : p > 0.3 ? "#f5a524" : "#3dd68c";
-const windColor = w => w < 17 ? "#3b82f6" : w < 25 ? "#22d3ee" : w < 33 ? "#facc15" : w < 42 ? "#f97316" : w < 50 ? "#ef4444" : "#a21caf";
+const colorP = p => p > 0.6 ? "#ef4444" : p > 0.3 ? "#f5a524" : "#9bcf53";
+// Warm sequential ramp (no blue): sand → amber → ember → red → oxblood
+const windColor = w => w < 17 ? "#fef3c7" : w < 25 ? "#fcd34d" : w < 33 ? "#f59e0b" : w < 42 ? "#ea580c" : w < 50 ? "#dc2626" : "#7f1d1d";
 
 const ASSETS = buildAssets();
 let RESULT = null, ENS = null, TRACK = null, SCN_NAME = "", ADVICE = null;
@@ -12,10 +13,57 @@ const dispatchLog = [];
 
 // ---------- Map ----------
 const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([20.3, 86.8], 7);
-// Offline land layer (Natural Earth) underneath, so the map works even without tile access
+// ---- Base maps: offline outline (always), Esri dark (no key), Google Maps (with API key) ----
 map.createPane("land"); map.getPane("land").style.zIndex = 150;
-L.geoJSON(LAND_GEOJSON, { pane: "land", style: { color: "#3b4a6b", weight: 1, fillColor: "#1a2438", fillOpacity: 1 }, interactive: false }).addTo(map);
-L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", { attribution: "Tiles © Esri — Esri, HERE, Garmin, © OpenStreetMap · Natural Earth", maxZoom: 16 }).addTo(map);
+const landLayer = L.geoJSON(LAND_GEOJSON, { pane: "land", style: { color: "#4a4238", weight: 1, fillColor: "#1d1a17", fillOpacity: 1 }, interactive: false }).addTo(map);
+const esriDark = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", { attribution: "Tiles © Esri — Esri, HERE, Garmin, © OpenStreetMap · Natural Earth", maxZoom: 16 });
+// Google dark style with warm tones — water is charcoal, not blue
+const GOOGLE_DARK = [
+  { elementType: "geometry", stylers: [{ color: "#1d1a17" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#a39a8e" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#141210" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#0f0e0c" }] },
+  { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#5c544a" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#3a332c" }] },
+  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#6b5a3e" }] },
+  { featureType: "administrative", elementType: "geometry.stroke", stylers: [{ color: "#5c544a" }] },
+  { featureType: "poi", stylers: [{ visibility: "off" }] },
+  { featureType: "transit", stylers: [{ visibility: "off" }] }
+];
+let baseLayer = null, googleLoading = null;
+const store = { get: k => { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+function mapsKey() {
+  const url = new URLSearchParams(location.search).get("mapsKey");
+  return (url || store.get("cs_maps_key") || (window.CONFIG && CONFIG.GOOGLE_MAPS_API_KEY) || "").trim();
+}
+function loadGoogleMaps(key) {
+  if (window.google && google.maps) return Promise.resolve();
+  if (googleLoading) return googleLoading;
+  googleLoading = new Promise((res, rej) => {
+    window.__gmReady = res;
+    window.gm_authFailure = () => { setMapsMsg("Google rejected this key — check billing, 'Maps JavaScript API' and website restrictions.", true); setBasemap("dark"); };
+    const sc = document.createElement("script");
+    sc.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&callback=__gmReady&loading=async&v=weekly`;
+    sc.async = true; sc.onerror = () => { googleLoading = null; rej(new Error("Could not load Google Maps")); };
+    document.head.appendChild(sc);
+  });
+  return googleLoading;
+}
+function setMapsMsg(t, bad) { const m = $("#mapsKeyMsg"); if (m) { m.textContent = t; m.className = "hint " + (bad ? "keybad" : "keyok"); } }
+async function setBasemap(kind) {
+  if (baseLayer) { map.removeLayer(baseLayer); baseLayer = null; }
+  $("#basemap").value = kind;
+  if (kind === "offline") return;
+  if (kind === "dark") { baseLayer = esriDark.addTo(map); return; }
+  const key = mapsKey();
+  if (!key) { setMapsMsg("Paste a Google Maps API key below first.", true); $("#basemap").value = "dark"; baseLayer = esriDark.addTo(map); return; }
+  try {
+    await loadGoogleMaps(key);
+    const type = kind.split("-")[1];
+    baseLayer = L.gridLayer.googleMutant({ type, styles: type === "roadmap" ? GOOGLE_DARK : [], maxZoom: 20 }).addTo(map);
+    setMapsMsg(`Google Maps (${type}) active.`, false);
+  } catch (e) { setMapsMsg(e.message, true); $("#basemap").value = "dark"; baseLayer = esriDark.addTo(map); }
+}
 const L_wind = L.layerGroup().addTo(map), L_track = L.layerGroup().addTo(map), L_ens = L.layerGroup().addTo(map),
       L_assets = L.layerGroup().addTo(map), L_surge = L.layerGroup().addTo(map), L_storm = L.layerGroup().addTo(map);
 L.control.layers(null, { "Wind field": L_wind, "Storm surge / inundation": L_surge, "Ensemble tracks": L_ens, "Infrastructure": L_assets }, { collapsed: true }).addTo(map);
@@ -39,23 +87,26 @@ function run() {
   RESULT = runScenario(TRACK, opts);
   ENS = $("#ensemble").checked ? runEnsemble(TRACK, opts, 30, 48) : null;
   $("#tSlider").min = TRACK[0].t; $("#tSlider").max = TRACK[TRACK.length - 1].t;
+  const mn = TRACK[0].t, mx = TRACK[TRACK.length - 1].t;
+  $("#tlLf").style.left = `calc(${(0 - mn) / (mx - mn) * 100}% + ${7 - 14 * (0 - mn) / (mx - mn)}px)`;
+  $("#scnChip").textContent = SCN_NAME;
   drawStatic(); drawTime(); renderPanels();
 }
 
 function drawStatic() {
   L_track.clearLayers(); L_ens.clearLayers(); L_assets.clearLayers(); L_surge.clearLayers();
-  L.polyline(TRACK.map(p => [p.lat, p.lon]), { color: "#fff", weight: 2.5, dashArray: "6 5" }).addTo(L_track);
+  L.polyline(TRACK.map(p => [p.lat, p.lon]), { color: "#f3eee6", weight: 2.5, dashArray: "6 5" }).addTo(L_track);
   TRACK.forEach(p => L.circleMarker([p.lat, p.lon], { radius: 4, color: windColor(p.v * 0.514), fillOpacity: 1 })
     .bindTooltip(`${tLab(p.t)} · ${Math.round(p.v)} kt · ${Math.round(p.p)} hPa`).addTo(L_track));
   if (ENS) {
-    ENS.tracks.forEach(tr => L.polyline(tr.map(p => [p.lat, p.lon]), { color: "#38bdf8", weight: 1, opacity: 0.18 }).addTo(L_ens));
+    ENS.tracks.forEach(tr => L.polyline(tr.map(p => [p.lat, p.lon]), { color: "#f5a524", weight: 1, opacity: 0.16 }).addTo(L_ens));
     const lf = RESULT.landfall;
-    L.circle([lf.lat, lf.lon], { radius: ENS.sigmaKm * 1000 * 1.5, color: "#38bdf8", weight: 1, dashArray: "4 4", fill: false })
+    L.circle([lf.lat, lf.lon], { radius: ENS.sigmaKm * 1000 * 1.5, color: "#f5a524", weight: 1.2, dashArray: "4 4", fill: false })
       .bindTooltip("Landfall uncertainty cone (~1.5σ)").addTo(L_ens);
   }
   // Surge/inundation bubbles
   RESULT.towns.filter(t => t.surge > 0.2).forEach(t => {
-    L.circle([t.lat, t.lon], { radius: 4000 + t.depth * 9000, color: "#0ea5e9", weight: 1, fillColor: "#0ea5e9", fillOpacity: Math.min(0.55, 0.12 + t.depth * 0.2) })
+    L.circle([t.lat, t.lon], { radius: 4000 + t.depth * 9000, color: "#e7dccb", weight: 1, dashArray: "2 3", fillColor: "#e7dccb", fillOpacity: Math.min(0.45, 0.08 + t.depth * 0.18) })
       .bindTooltip(`${t.name}: surge ${t.surge.toFixed(1)} m · inundation ${t.depth.toFixed(1)} m`).addTo(L_surge);
   });
   RESULT.assets.forEach(a => {
@@ -64,7 +115,7 @@ function drawStatic() {
       `Peak wind ${Math.round(a.maxWind * 3.6)} km/h · Inundation ${a.depth.toFixed(2)} m · Rain ${Math.round(a.rain)} mm<br>Main driver: ${a.driver}${a.cascade ? `<br>Cascade: ${a.cascade}` : ""}` +
       `<br>Gale onset: ${a.onset !== null ? tLab(a.onset) : "—"}`;
     if (a.path) L.polyline(a.path, { color: c, weight: a.pService > 0.3 ? 4 : 2, opacity: 0.85 }).bindPopup(html).addTo(L_assets);
-    else L.circleMarker([a.lat, a.lon], { radius: a.type === "hospital" || a.type === "substation" ? 6 : 4.5, color: "#0b1220", weight: 1, fillColor: c, fillOpacity: 0.95 }).bindPopup(html).addTo(L_assets);
+    else L.circleMarker([a.lat, a.lon], { radius: a.type === "hospital" || a.type === "substation" ? 6 : 4.5, color: "#0f0e0c", weight: 1.2, fillColor: c, fillOpacity: 0.95 }).bindPopup(html).addTo(L_assets);
   });
 }
 
@@ -74,8 +125,8 @@ function drawTime() {
   const s = stateAt(TRACK, t);
   $("#stormInfo").textContent = `${s.lat.toFixed(2)}°N ${s.lon.toFixed(2)}°E · ${Math.round(s.v)} kt (${Math.round(s.v * 1.852)} km/h) · ${Math.round(s.p)} hPa · moving ${Math.round(s.heading)}° @ ${Math.round(s.vt * 3.6)} km/h`;
   L_wind.clearLayers(); L_storm.clearLayers();
-  windGrid(s).forEach(c => L.rectangle([[c.la, c.lo], [c.la + 0.2, c.lo + 0.2]], { stroke: false, fillColor: windColor(c.w), fillOpacity: Math.min(0.6, 0.12 + c.w / 90), interactive: false }).addTo(L_wind));
-  L.marker([s.lat, s.lon], { icon: L.divIcon({ className: "", html: '<div class="storm-icon">🌀</div>', iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(L_storm);
+  windGrid(s).forEach(c => L.rectangle([[c.la, c.lo], [c.la + 0.2, c.lo + 0.2]], { stroke: false, fillColor: windColor(c.w), fillOpacity: Math.min(0.55, 0.1 + c.w / 100), interactive: false }).addTo(L_wind));
+  L.marker([s.lat, s.lon], { icon: L.divIcon({ className: "", html: '<div class="storm-icon"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="#f5a524" stroke-width="2.2" stroke-linecap="round"><path d="M12 12m-2.2 0a2.2 2.2 0 1 0 4.4 0a2.2 2.2 0 1 0-4.4 0"/><path d="M12 3c-5 0-9 3.2-9 7.5"/><path d="M21 13.5C21 17.8 17 21 12 21"/><path d="M4.5 16.5C6 19 9 20.6 12 21"/><path d="M19.5 7.5C18 5 15 3.4 12 3"/></svg></div>', iconSize: [34, 34], iconAnchor: [17, 17] }) }).addTo(L_storm);
 }
 
 // ---------- Panels ----------
@@ -98,21 +149,21 @@ function renderPanels() {
       <div class="kpi"><b>${earliest ? tLab(earliest.evacDeadline) : "—"}</b><span>Earliest evacuation deadline ${earliest ? "(" + earliest.name + ")" : ""}</span></div>
     </div>
     <div class="note">${SCN_NAME}. Landfall ${R.landfall.lat.toFixed(2)}°N ${R.landfall.lon.toFixed(2)}°E. ${ENS ? `Ensemble track error σ ≈ ${Math.round(ENS.sigmaKm)} km at 48 h lead.` : ""}</div>
-    <h3 style="font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px">Highest-risk infrastructure</h3>
+    <h3 class="sec">Highest-risk infrastructure</h3>
     ${topAssets.map(a => `<div class="card" style="padding:8px 10px"><b>${ASSET_TYPES[a.type].icon} ${a.name}</b><div class="hint">${Math.round(a.pService * 100)}% service-loss · driver: ${a.driver}${a.cascade ? " · cascade: " + a.cascade : ""}</div><div class="bar"><i style="width:${a.pService * 100}%;background:${colorP(a.pService)}"></i></div></div>`).join("")}
-    <h3 style="font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px">Asset exposure by type</h3>
+    <h3 class="sec">Asset exposure by type</h3>
     <table><tr><th>Type</th><th>Assets</th><th>&gt;50% loss</th><th>Mean loss</th></tr>
     ${Object.keys(ASSET_TYPES).map(k => { const xs = R.assets.filter(a => a.type === k); return `<tr><td>${ASSET_TYPES[k].icon} ${ASSET_TYPES[k].label}</td><td>${xs.length}</td><td>${xs.filter(a => a.pService > 0.5).length}</td><td>${Math.round(xs.reduce((s, a) => s + a.pService, 0) / xs.length * 100)}%</td></tr>`; }).join("")}</table>`;
 
   const order = { Red: 0, Orange: 1, Yellow: 2, Green: 3 };
-  $("#tab-districts").innerHTML = `<table><tr><th>Town</th><th>Alert</th><th>Wind km/h</th><th>Surge / inund. (m)</th><th>Evacuate</th><th>Deadline</th>${ENS ? "<th>P(≥33 m/s)</th>" : ""}</tr>
+  $("#tab-districts").innerHTML = `<table class="dt"><tr><th>Town / alert</th><th class="r">Wind<br>km/h</th><th class="r">Surge<br>/ flood m</th><th class="r">Evacuate</th><th class="r">Deadline</th></tr>
     ${R.towns.slice().sort((a, b) => order[a.level] - order[b.level] || b.maxWind - a.maxWind).map(t => `<tr class="click" data-lat="${t.lat}" data-lon="${t.lon}">
-      <td><b>${t.name}</b><div class="hint">${t.district}</div></td><td><span class="pill ${t.level}">${t.level}</span></td>
-      <td>${Math.round(t.maxWind * 3.6)}</td><td>${t.surge.toFixed(1)} / ${t.depth.toFixed(1)}<div class="hint">${Math.round(t.rain)} mm rain</div></td>
-      <td>${fmt(t.evac)}${t.evac > t.shelterCap && t.evac > 0 ? ' <span title="Shelter capacity shortfall" style="color:var(--red)">⚠</span>' : ""}</td>
-      <td class="mono">${t.evacDeadline !== null && t.level !== "Green" ? tLab(t.evacDeadline) : "—"}</td>
-      ${ENS ? `<td>${Math.round(ENS.prob[t.id].w33 * 100)}%</td>` : ""}</tr>`).join("")}</table>
-      <p class="hint">⚠ = modelled evacuee demand exceeds functional shelter capacity (after damage). Deadline = gale-force onset − 6 h.</p>`;
+      <td><b>${t.name}</b> <span class="pill ${t.level}">${t.level}</span><div class="hint" style="margin:3px 0 0">${Math.round(t.rain)} mm rain${ENS ? ` · P(≥33 m/s) ${Math.round(ENS.prob[t.id].w33 * 100)}%` : ""}</div></td>
+      <td class="num r">${Math.round(t.maxWind * 3.6)}</td><td class="num r">${t.surge.toFixed(1)} / ${t.depth.toFixed(1)}</td>
+      <td class="num r">${fmt(t.evac)}${t.evac > t.shelterCap && t.evac > 0 ? ' <span title="Shelter capacity shortfall" style="color:var(--red)">⚠</span>' : ""}</td>
+      <td class="num r">${t.evacDeadline !== null && t.level !== "Green" ? tLab(t.evacDeadline) : "—"}</td>
+</tr>`).join("")}</table>
+      <p class="hint">⚠ modelled evacuees exceed functional shelter capacity after damage · Deadline = gale-force onset − 6 h.</p>`;
 
   $("#tab-assets").innerHTML = `<table><tr><th>Asset</th><th>Loss %</th><th>Driver / cascade</th><th>Risk</th></tr>
     ${R.assets.slice().sort((a, b) => b.risk - a.risk).map(a => `<tr class="click" data-lat="${a.lat}" data-lon="${a.lon}"><td>${ASSET_TYPES[a.type].icon} ${a.name}<div class="hint">wind ${Math.round(a.maxWind * 3.6)} km/h · ${a.depth.toFixed(2)} m · ${Math.round(a.rain)} mm</div></td>
@@ -155,9 +206,9 @@ function renderAdvice(o) {
       <ul>${(a.actions || []).map(x => `<li>${x}</li>`).join("")}</ul>
       <div class="sms"><b>SMS (${a.local_language}):</b> ${a.local_language_sms}</div><div class="sms"><b>SMS (English):</b> ${a.english_sms}</div>
       <div class="btnrow"><button data-cap="${i}">CAP-XML</button><button data-disp="${i}">Dispatch</button></div></div>`).join("")}
-    <h3 style="font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px">Pre-landfall infrastructure hardening</h3>
+    <h3 class="sec">Pre-landfall infrastructure hardening</h3>
     <table><tr><th>Asset</th><th>Action</th><th>By</th></tr>${(o.infrastructure_actions || []).map(x => `<tr><td>${x.asset}</td><td>${x.action}</td><td class="mono">T-${x.deadline_h_before_landfall}h</td></tr>`).join("")}</table>
-    <h3 style="font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.8px">Damage pathways</h3><ul>${(o.damage_pathways || []).map(x => `<li>${x}</li>`).join("")}</ul>
+    <h3 class="sec">Damage pathways</h3><ul>${(o.damage_pathways || []).map(x => `<li>${x}</li>`).join("")}</ul>
     <div class="log" id="log">${dispatchLog.join("<br>") || "Dispatch log — messages go to SACHET/CAP aggregator, cell-broadcast, SMS gateway and district WhatsApp groups (simulated)."}</div>`;
   document.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => showModal(toCAP(o.advisories[+b.dataset.cap], RESULT, +b.dataset.cap)));
   document.querySelectorAll("[data-disp]").forEach(b => b.onclick = () => dispatch(o.advisories[+b.dataset.disp]));
@@ -193,4 +244,14 @@ $("#play").onclick = () => {
   $("#play").textContent = "⏸";
   timer = setInterval(() => { const s = $("#tSlider"); s.value = +s.value >= +s.max ? s.min : +s.value + 2; drawTime(); }, 180);
 };
+// Map settings
+$("#basemap").onchange = e => setBasemap(e.target.value);
+$("#mapsKey").value = mapsKey();
+$("#mapsKeyBtn").onclick = () => {
+  const k = $("#mapsKey").value.trim();
+  if (!k) { setMapsMsg("Key is empty.", true); return; }
+  store.set("cs_maps_key", k); googleLoading = null;
+  setBasemap($("#basemap").value.startsWith("google") ? $("#basemap").value : "google-roadmap");
+};
+setBasemap(mapsKey() && window.CONFIG && CONFIG.DEFAULT_BASEMAP ? CONFIG.DEFAULT_BASEMAP : (window.CONFIG && CONFIG.DEFAULT_BASEMAP && !CONFIG.DEFAULT_BASEMAP.startsWith("google") ? CONFIG.DEFAULT_BASEMAP : "dark"));
 run();
