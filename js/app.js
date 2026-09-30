@@ -15,7 +15,7 @@ const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([20.
 // Offline land layer (Natural Earth) underneath, so the map works even without tile access
 map.createPane("land"); map.getPane("land").style.zIndex = 150;
 L.geoJSON(LAND_GEOJSON, { pane: "land", style: { color: "#3b4a6b", weight: 1, fillColor: "#1a2438", fillOpacity: 1 }, interactive: false }).addTo(map);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { attribution: "© OpenStreetMap, © CARTO · Natural Earth", maxZoom: 18 }).addTo(map);
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", { attribution: "Tiles © Esri — Esri, HERE, Garmin, © OpenStreetMap · Natural Earth", maxZoom: 16 }).addTo(map);
 const L_wind = L.layerGroup().addTo(map), L_track = L.layerGroup().addTo(map), L_ens = L.layerGroup().addTo(map),
       L_assets = L.layerGroup().addTo(map), L_surge = L.layerGroup().addTo(map), L_storm = L.layerGroup().addTo(map);
 L.control.layers(null, { "Wind field": L_wind, "Storm surge / inundation": L_surge, "Ensemble tracks": L_ens, "Infrastructure": L_assets }, { collapsed: true }).addTo(map);
